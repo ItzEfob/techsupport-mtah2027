@@ -1,0 +1,16 @@
+{
+  "params": {
+    "smooth_window": 75
+  },
+  "source": "tuned by external/tune.py on IDSSE (7 Bundesliga matches, CC BY 4.0), degraded by external/degrade.py; the competition match was not used",
+  "idsse_mean_spell_f1": 0.2186,
+  "matches": [
+    "J03WMX",
+    "J03WN1",
+    "J03WOH",
+    "J03WOY",
+    "J03WPY",
+    "J03WQQ",
+    "J03WR9"
+  ]
+}
