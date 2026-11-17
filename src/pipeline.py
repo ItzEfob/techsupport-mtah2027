@@ -11,6 +11,8 @@ def predict(arrays, params):
 
     params:
         smooth_window   frames looked at on each side by the majority vote
+        min_possession  a possession shorter than this (frames), with the other team on both sides,
+                        is merged into the surrounding possession. 0 switches it off.
         out_margin      dead-ball rule: ball beyond the pitch by this much (0-1 units) means D.
                         None switches the rule off.
     """

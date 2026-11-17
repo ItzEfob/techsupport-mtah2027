@@ -28,9 +28,12 @@ IDSSE_DIR = os.path.join(ROOT, "data", "idsse")
 PARAMS_PATH = os.path.join(ROOT, "params.json")
 
 # What we try. 25 frames = 1 second.
-WINDOWS = (38, 50, 75, 100, 125)
+WINDOWS = (38, 50, 75)
 # Dead-ball rule: None = off (version 1), otherwise how far beyond the line the ball must be.
-MARGINS = (None, 0.0, 0.01, 0.03)
+# Version 2 settled on 0.0, so only that is tried now.
+MARGINS = (0.0,)
+# Minimum possession length in frames (0 = off, which is version 2).
+MIN_POSSESSIONS = (0, 25, 50, 75, 125)
 # How long the ball stays lost in the degraded data. Unknown for the real match, so we try three
 # and want a setting that works across all of them.
 BALL_GAPS = (10, 30, 75)
@@ -60,7 +63,7 @@ def main():
         raise SystemExit("no matches in {} -- run external/prepare_idsse.py first".format(IDSSE_DIR))
 
     # Every candidate setting is a (window, margin) pair. spell[c][g] collects one score per match.
-    candidates = [(w, m) for m in MARGINS for w in WINDOWS]
+    candidates = [(w, m, L) for m in MARGINS for L in MIN_POSSESSIONS for w in WINDOWS]
     spell = {c: {g: [] for g in BALL_GAPS} for c in candidates}
     macro = {c: {g: [] for g in BALL_GAPS} for c in candidates}
 
@@ -70,32 +73,34 @@ def main():
         print("scoring {} ...".format(name), flush=True)
         for gap in BALL_GAPS:
             noisy = degrade(clean, name=name, ball_mean_gap=gap)
-            for window, margin in candidates:
-                predicted = predict(noisy, {"smooth_window": window, "out_margin": margin})
+            for c in candidates:
+                window, margin, min_len = c
+                predicted = predict(noisy, {"smooth_window": window, "out_margin": margin,
+                                            "min_possession": min_len})
                 s, m = score(clean["labels"], predicted, clean["period"])
-                spell[(window, margin)][gap].append(s)
-                macro[(window, margin)][gap].append(m)
+                spell[c][gap].append(s)
+                macro[c][gap].append(m)
 
     print("\nmean spellF1 over {} matches (columns: mean ball gap in frames)".format(len(paths)))
-    print("margin  window  " + "  ".join("gap{:<4}".format(g) for g in BALL_GAPS) + "   all    worst-match  macroF1")
+    print("minlen  window  " + "  ".join("gap{:<4}".format(g) for g in BALL_GAPS) + "   all    worst-match  macroF1")
     best, best_score = None, -1.0
     for c in candidates:
-        window, margin = c
+        window, margin, min_len = c
         per_gap = [float(np.mean(spell[c][g])) for g in BALL_GAPS]
         everything = [s for g in BALL_GAPS for s in spell[c][g]]
         overall = float(np.mean(everything))
-        print("{:>6}  {:>6}  ".format("off" if margin is None else margin, window) + "  ".join("{:.4f} ".format(v) for v in per_gap)
+        print("{:>6}  {:>6}  ".format(min_len, window) + "  ".join("{:.4f} ".format(v) for v in per_gap)
               + "  {:.4f}  {:.4f}       {:.4f}".format(
                   overall, min(everything),
                   float(np.mean([m for g in BALL_GAPS for m in macro[c][g]]))))
         if overall > best_score:
             best, best_score = c, overall
 
-    print("\nbest: smooth_window = {}, out_margin = {}  (mean spellF1 {:.4f})".format(
-        best[0], best[1], best_score))
+    print("\nbest: smooth_window = {}, out_margin = {}, min_possession = {}  (mean spellF1 {:.4f})"
+          .format(best[0], best[1], best[2], best_score))
     with open(PARAMS_PATH, "w") as handle:
         json.dump({
-            "params": {"smooth_window": best[0], "out_margin": best[1]},
+            "params": {"smooth_window": best[0], "out_margin": best[1], "min_possession": best[2]},
             "source": "tuned by external/tune.py on IDSSE (7 Bundesliga matches, CC BY 4.0), "
                       "degraded by external/degrade.py; the competition match was not used",
             "idsse_mean_spell_f1": round(best_score, 4),

@@ -2,7 +2,7 @@
 
 ## 1. Approach
 
-Our submission labels every frame of BAR-ATH with one of `H`, `A`, `D` or `X` in four steps:
+Our submission labels every frame of BAR-ATH with one of `H`, `A`, `D` or `X` in five steps:
 
 1. **Per-frame evidence.** When the tracking has a ball position, we find the nearest tracked
    player, measuring distance in metres so the pitch's length and width are weighted correctly.
@@ -14,7 +14,10 @@ Our submission labels every frame of BAR-ATH with one of `H`, `A`, `D` or `X` in
 3. **Temporal decoding.** Each half is decoded on its own. Every frame takes the team seen most
    often in a centred window of ±50 frames (±2 s). A frame whose whole window has no evidence is
    labelled `D`.
-4. **Outside play.** Frames outside the two graded halves (before kickoff, half-time, after the
+4. **Removing blips.** A possession shorter than 50 frames (2 s) with the other team on both
+   sides is merged into the surrounding possession: `A A A H A A A` becomes all `A`. A short
+   spell next to a dead ball is kept, since a quick possession right after a restart is real.
+5. **Outside play.** Frames outside the two graded halves (before kickoff, half-time, after the
    final whistle) are labelled `X`.
 
 We chose this method because it is simple, fully deterministic and easy to verify. Most of our
@@ -34,8 +37,8 @@ setting comes from external data.
 ## 3. Training and tuning data
 
 **Nothing in the method was trained, fitted or tuned on the competition match, its video or its
-ground truth.** Both settings (the window width and the dead-ball margin) were chosen on external
-data only.
+ground truth.** All three settings (window width, dead-ball margin, minimum possession length)
+were chosen on external data only.
 
 - **Dataset:** IDSSE, *An integrated dataset of spatiotemporal and event data in elite soccer*
   (Bassek, Rein, Weber, Memmert, *Scientific Data* 12, 195, 2025,
@@ -63,6 +66,24 @@ Mean over 7 matches × 3 gap lengths, best window for each dead-ball setting:
 We selected the rule with margin 0 and a ±50 window. It beats the rule-off version at every gap
 length and on the worst match, and it raises macroF1 from 0.38 to 0.66.
 
+With that rule fixed, we then tuned the minimum possession length (0, 1, 2, 3 and 5 s) together
+with the window:
+
+| Minimum possession | Best window | spellF1 | worst match | macroF1 |
+|---|---|---|---|---|
+| off | ±50 | 0.243 | 0.216 | 0.664 |
+| 1 s | ±50 | 0.275 | 0.246 | 0.666 |
+| **2 s** | **±50** | **0.277** | **0.253** | **0.669** |
+| 3 s | ±38 | 0.274 | 0.242 | 0.671 |
+| 5 s | ±50 | 0.247 | 0.202 | 0.673 |
+
+We selected 2 s with a ±50 window. It beats the version without blip removal at every gap length
+and on the worst match, and lengths from 1 to 3 s all score within 0.003 of it, so the choice is
+stable.
+
+**Overall, the final method scores 0.277 on IDSSE against 0.219 for nearest player plus majority
+vote alone.**
+
 We also ran one automatic check on the provided tracking, which the organisers confirmed is
 allowed: the BAR-ATH ball is outside the pitch on 3,949 of 158,857 graded frames, so the rule
 has something to act on in the competition match.
@@ -74,6 +95,8 @@ has something to act on in the competition match.
   method follows the "controlled possession" rule.
 - `D` is predicted when the tracked ball is outside the pitch, or when the ball has been
   invisible for the entire window. Restarts are not detected explicitly.
+- Possessions shorter than 2 s inside the other team's possession are treated as deflections or
+  tracking slips, not as changes of possession.
 - Halves are decoded separately, so no possession crosses half-time.
 
 ## 5. Limitations
@@ -84,6 +107,8 @@ has something to act on in the competition match.
 - **The dead-ball rule is sensitive to its margin.** On IDSSE, a margin of 0 helps clearly while
   0.03 does nothing, so the gain depends on where each tracker places a ball just past the line.
 - **Hand-overs are blurred.** A majority vote moves each transition by up to the window size.
+- **Real short possessions can be removed.** A genuine 1-second possession between two of the
+  other team's (for example, a won header followed by an immediate loss) is merged away.
 - **The degraded IDSSE data is only an approximation.** Our gaps are placed at random, while the
   real tracker loses the ball most often in crowded, contested moments. Our IDSSE scores are
   therefore probably optimistic.

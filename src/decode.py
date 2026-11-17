@@ -29,6 +29,31 @@ def majority_vote(codes, window):
     return labels
 
 
+def merge_short_blips(labels, min_len):
+    """Remove possessions shorter than `min_len` frames that sit inside the other team's possession.
+
+    "A A A H A A A" with a one-frame H becomes all A: a short spell of one team, with the other
+    team on both sides, is far more likely to be a deflection or a tracking slip than a real change
+    of possession. Only that case is merged. A short spell next to a dead ball is kept, because a
+    quick possession right after a restart is common in real football.
+    """
+    if min_len <= 1:
+        return labels
+    labels = labels.copy()
+    # Run-length encode: start index, length and label of each constant stretch.
+    change = np.flatnonzero(labels[1:] != labels[:-1]) + 1
+    starts = np.concatenate(([0], change))
+    lengths = np.diff(np.concatenate((starts, [len(labels)])))
+    values = labels[starts]
+    for i in range(1, len(starts) - 1):
+        if (values[i] in ("H", "A") and lengths[i] < min_len
+                and values[i - 1] == values[i + 1] and values[i - 1] in ("H", "A")
+                and values[i - 1] != values[i]):
+            labels[starts[i]:starts[i] + lengths[i]] = values[i - 1]
+            values[i] = values[i - 1]  # so a chain of blips keeps merging into the same team
+    return labels
+
+
 def decode(codes, period, params):
     """Final label per frame: H, A, D, or X outside the two halves.
 
@@ -38,5 +63,6 @@ def decode(codes, period, params):
     for half in (1, 2):
         inside = period == half
         if inside.any():
-            labels[inside] = majority_vote(codes[inside], params["smooth_window"])
+            voted = majority_vote(codes[inside], params["smooth_window"])
+            labels[inside] = merge_short_blips(voted, params.get("min_possession", 0))
     return labels
