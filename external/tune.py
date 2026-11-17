@@ -28,7 +28,9 @@ IDSSE_DIR = os.path.join(ROOT, "data", "idsse")
 PARAMS_PATH = os.path.join(ROOT, "params.json")
 
 # What we try. 25 frames = 1 second.
-WINDOWS = (0, 12, 25, 38, 50, 75, 100, 125, 175, 250)
+WINDOWS = (38, 50, 75, 100, 125)
+# Dead-ball rule: None = off (version 1), otherwise how far beyond the line the ball must be.
+MARGINS = (None, 0.0, 0.01, 0.03)
 # How long the ball stays lost in the degraded data. Unknown for the real match, so we try three
 # and want a setting that works across all of them.
 BALL_GAPS = (10, 30, 75)
@@ -57,9 +59,10 @@ def main():
     if not paths:
         raise SystemExit("no matches in {} -- run external/prepare_idsse.py first".format(IDSSE_DIR))
 
-    # spell[w][g] and macro[w][g] collect one score per match.
-    spell = {w: {g: [] for g in BALL_GAPS} for w in WINDOWS}
-    macro = {w: {g: [] for g in BALL_GAPS} for w in WINDOWS}
+    # Every candidate setting is a (window, margin) pair. spell[c][g] collects one score per match.
+    candidates = [(w, m) for m in MARGINS for w in WINDOWS]
+    spell = {c: {g: [] for g in BALL_GAPS} for c in candidates}
+    macro = {c: {g: [] for g in BALL_GAPS} for c in candidates}
 
     for path in paths:
         name = os.path.splitext(os.path.basename(path))[0]
@@ -67,30 +70,32 @@ def main():
         print("scoring {} ...".format(name), flush=True)
         for gap in BALL_GAPS:
             noisy = degrade(clean, name=name, ball_mean_gap=gap)
-            for window in WINDOWS:
-                predicted = predict(noisy, {"smooth_window": window})
+            for window, margin in candidates:
+                predicted = predict(noisy, {"smooth_window": window, "out_margin": margin})
                 s, m = score(clean["labels"], predicted, clean["period"])
-                spell[window][gap].append(s)
-                macro[window][gap].append(m)
+                spell[(window, margin)][gap].append(s)
+                macro[(window, margin)][gap].append(m)
 
     print("\nmean spellF1 over {} matches (columns: mean ball gap in frames)".format(len(paths)))
-    print("window  " + "  ".join("gap{:<4}".format(g) for g in BALL_GAPS) + "   all    worst-match  macroF1")
-    best_window, best_score = None, -1.0
-    for window in WINDOWS:
-        per_gap = [float(np.mean(spell[window][g])) for g in BALL_GAPS]
-        everything = [s for g in BALL_GAPS for s in spell[window][g]]
+    print("margin  window  " + "  ".join("gap{:<4}".format(g) for g in BALL_GAPS) + "   all    worst-match  macroF1")
+    best, best_score = None, -1.0
+    for c in candidates:
+        window, margin = c
+        per_gap = [float(np.mean(spell[c][g])) for g in BALL_GAPS]
+        everything = [s for g in BALL_GAPS for s in spell[c][g]]
         overall = float(np.mean(everything))
-        print("{:>6}  ".format(window) + "  ".join("{:.4f} ".format(v) for v in per_gap)
+        print("{:>6}  {:>6}  ".format("off" if margin is None else margin, window) + "  ".join("{:.4f} ".format(v) for v in per_gap)
               + "  {:.4f}  {:.4f}       {:.4f}".format(
                   overall, min(everything),
-                  float(np.mean([m for g in BALL_GAPS for m in macro[window][g]]))))
+                  float(np.mean([m for g in BALL_GAPS for m in macro[c][g]]))))
         if overall > best_score:
-            best_window, best_score = window, overall
+            best, best_score = c, overall
 
-    print("\nbest: smooth_window = {}  (mean spellF1 {:.4f})".format(best_window, best_score))
+    print("\nbest: smooth_window = {}, out_margin = {}  (mean spellF1 {:.4f})".format(
+        best[0], best[1], best_score))
     with open(PARAMS_PATH, "w") as handle:
         json.dump({
-            "params": {"smooth_window": best_window},
+            "params": {"smooth_window": best[0], "out_margin": best[1]},
             "source": "tuned by external/tune.py on IDSSE (7 Bundesliga matches, CC BY 4.0), "
                       "degraded by external/degrade.py; the competition match was not used",
             "idsse_mean_spell_f1": round(best_score, 4),

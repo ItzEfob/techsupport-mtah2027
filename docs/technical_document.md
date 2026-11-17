@@ -2,16 +2,19 @@
 
 ## 1. Approach
 
-Our submission labels every frame of BAR-ATH with one of `H`, `A`, `D` or `X` in three steps:
+Our submission labels every frame of BAR-ATH with one of `H`, `A`, `D` or `X` in four steps:
 
 1. **Per-frame evidence.** When the tracking has a ball position, we find the nearest tracked
    player, measuring distance in metres so the pitch's length and width are weighted correctly.
    That player's team is the evidence for the frame. When the ball is missing or no player is
    tracked, the frame has no evidence.
-2. **Temporal decoding.** Each half is decoded on its own. Every frame takes the team seen most
-   often in a centred window of ±75 frames (±3 s). A frame whose whole window has no evidence is
+2. **Dead-ball rule.** When the tracked ball lies outside the pitch (x or y below 0 or above 1 in
+   normalised coordinates), the frame is a dead ball. Such frames give no team evidence and are
+   labelled `D` whatever the decoding below says.
+3. **Temporal decoding.** Each half is decoded on its own. Every frame takes the team seen most
+   often in a centred window of ±50 frames (±2 s). A frame whose whole window has no evidence is
    labelled `D`.
-3. **Outside play.** Frames outside the two graded halves (before kickoff, half-time, after the
+4. **Outside play.** Frames outside the two graded halves (before kickoff, half-time, after the
    final whistle) are labelled `X`.
 
 We chose this method because it is simple, fully deterministic and easy to verify. Most of our
@@ -31,7 +34,8 @@ setting comes from external data.
 ## 3. Training and tuning data
 
 **Nothing in the method was trained, fitted or tuned on the competition match, its video or its
-ground truth.** The single setting (the window width) was chosen on external data only.
+ground truth.** Both settings (the window width and the dead-ball margin) were chosen on external
+data only.
 
 - **Dataset:** IDSSE, *An integrated dataset of spatiotemporal and event data in elite soccer*
   (Bassek, Rein, Weber, Memmert, *Scientific Data* 12, 195, 2025,
@@ -47,27 +51,38 @@ ground truth.** The single setting (the window width) was chosen on external dat
   and 75 frames) and averaged the results.
 - **Scoring:** the organisers' own `possession_metrics.py`, ranked on `spellF1`.
 
-Mean `spellF1` over 7 matches × 3 gap lengths:
+Mean over 7 matches × 3 gap lengths, best window for each dead-ball setting:
 
-| Window (± frames) | 0 | 25 | 50 | **75** | 100 | 125 | 250 |
-|---|---|---|---|---|---|---|---|
-| spellF1 | 0.027 | 0.165 | 0.213 | **0.219** | 0.206 | 0.191 | 0.121 |
+| Dead-ball rule | Best window | spellF1 | worst match | macroF1 |
+|---|---|---|---|---|
+| off | ±75 | 0.219 | 0.180 | 0.380 |
+| **ball outside the pitch (margin 0)** | **±50** | **0.243** | **0.216** | **0.664** |
+| outside by more than 0.01 | ±75 | 0.225 | 0.202 | 0.485 |
+| outside by more than 0.03 | ±75 | 0.219 | 0.181 | 0.391 |
 
-The window of 75 frames was selected. The choice is stable: 50 and 75 score almost the same.
+We selected the rule with margin 0 and a ±50 window. It beats the rule-off version at every gap
+length and on the worst match, and it raises macroF1 from 0.38 to 0.66.
+
+We also ran one automatic check on the provided tracking, which the organisers confirmed is
+allowed: the BAR-ATH ball is outside the pitch on 3,949 of 158,857 graded frames, so the rule
+has something to act on in the competition match.
 
 ## 4. Possession rules implemented
 
 - A possession is the team the evidence favours over a ±3 s window. Brief touches, deflections and
   duels shorter than the window are absorbed into the surrounding possession, which is how the
   method follows the "controlled possession" rule.
-- `D` is predicted only when the ball has been invisible for the entire window. We have no
-  explicit detection of out-of-play balls or restarts.
+- `D` is predicted when the tracked ball is outside the pitch, or when the ball has been
+  invisible for the entire window. Restarts are not detected explicitly.
 - Halves are decoded separately, so no possession crosses half-time.
 
 ## 5. Limitations
 
-- **Dead balls are the main weakness.** The method only predicts `D` during long tracking gaps.
-  It misses most stoppages and over-predicts `D` during long occlusions in open play.
+- **Dead balls are still the main weakness.** The out-of-pitch rule only fires when the tracker
+  follows the ball past the line, which covers about 2.5% of graded frames. Fouls, offsides and
+  other stoppages inside the pitch are missed.
+- **The dead-ball rule is sensitive to its margin.** On IDSSE, a margin of 0 helps clearly while
+  0.03 does nothing, so the gain depends on where each tracker places a ball just past the line.
 - **Hand-overs are blurred.** A majority vote moves each transition by up to the window size.
 - **The degraded IDSSE data is only an approximation.** Our gaps are placed at random, while the
   real tracker loses the ball most often in crowded, contested moments. Our IDSSE scores are
@@ -76,8 +91,8 @@ The window of 75 frames was selected. The choice is stable: 50 and 75 score almo
   in the competition's public window. A window tuned on IDSSE may switch teams too readily on
   BAR-ATH.
 
-**With more time we would add:** dead-ball detection from the ball leaving the pitch and from
-Smart Tagging restarts; a switching model (HMM / Viterbi) with a cost for changing team in place
+**With more time we would add:** dead-ball detection from Smart Tagging restarts and from all
+players slowing down together; a switching model (HMM / Viterbi) with a cost for changing team in place
 of the majority vote; and an explicit `X` during occlusions inside a possession.
 
 ## 6. Reproduction
